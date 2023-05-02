@@ -2,3 +2,7 @@
 build/
 *.egg-info/
 dist/
+.venv/
+.vscode
+*.egg
+*.eggs/
