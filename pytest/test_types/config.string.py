@@ -1,0 +1,6 @@
+TEST_STRING.val = ""
+assert TEST_STRING.val == ""
+TEST_STRING.val = "FOO"
+assert TEST_STRING.val == "FOO"
+TEST_STRING.val = "FOO BAR"
+assert TEST_STRING.val == "FOO BAR"
