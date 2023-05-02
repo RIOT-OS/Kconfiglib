@@ -570,6 +570,11 @@ VERSION = (14, 1, 0)
 #
 # Public classes
 #
+class KconfigException(Exception):
+    def __init__(self, msg, file, line):
+        super().__init__(msg)
+        self.file = file
+        self.line = line
 
 
 class Kconfig(object):
@@ -845,6 +850,7 @@ class Kconfig(object):
         "warn_assign_undef",
         "warn_to_stderr",
         "warnings",
+        "configured_syms",
         "y",
 
         # Parsing-related
@@ -960,7 +966,7 @@ class Kconfig(object):
         # See __init__()
 
         self._encoding = encoding
-
+        self.configured_syms = set()
         self.srctree = os.getenv("srctree", "")
         # A prefix we can reliably strip from glob() results to get a filename
         # relative to $srctree. relpath() can cause issues for symlinks,
@@ -1236,13 +1242,60 @@ class Kconfig(object):
         # This stub only exists to make sure _warn_assign_no_prompt gets
         # reenabled
         try:
-            self._load_config(filename, replace)
+            if filename.endswith(".py"):
+                self._load_config_py(filename)
+            else:
+                self._load_config(filename, replace)
         except UnicodeDecodeError as e:
             _decoding_error(e, filename)
         finally:
             self._warn_assign_no_prompt = True
 
         return ("Loaded" if replace else "Merged") + msg
+
+    def _load_config_py(self, filename):
+
+        assert filename.endswith(".py")
+        # Get directory from filename, if relative directory then take use .
+        base_dir = os.path.dirname(filename) or "."
+
+        config = """
+import os
+import traceback
+
+def kconfig_import(rel_path):
+    conf_globals=globals()
+    global _rel_dir
+    full_path = os.path.join(_rel_dir, rel_path)
+    _rel_dir = os.path.dirname(os.path.realpath(full_path))
+    with open(full_path, "r") as f:
+        config = f.read()
+    try:
+        exec(config, conf_globals)
+    except KconfigException as exc:
+        raise exc
+    except Exception as exc:
+        tb = exc.__traceback__
+        lineno = traceback.extract_tb(tb)[1].lineno
+        exc.file = full_path
+        exc.line = lineno
+        raise KconfigException(str(exc), full_path, lineno)
+
+"""
+        config += f"kconfig_import(\"{filename}\")"
+
+        conf_globals = self.syms
+        conf_globals["_rel_dir"] = base_dir
+        conf_globals.update(self.named_choices)
+        conf_globals['KconfigException'] = KconfigException
+        conf_globals["kconfig_import"] = self._load_config_py
+
+        try:
+            exec(config, conf_globals)
+        except KconfigException as exc:
+            self._warn(str(exc), exc.file, exc.line)
+            raise exc
+
 
     def _load_config(self, filename, replace):
         with self._open_config(filename) as f:
@@ -4264,6 +4317,7 @@ class Symbol(object):
         "selects",
         "user_value",
         "weak_rev_dep",
+        "_attempted_value"
     )
 
     #
@@ -4282,6 +4336,40 @@ class Symbol(object):
             return BOOL
 
         return self.orig_type
+
+    @property
+    def val(self):
+        if self.type == BOOL or self.type == TRISTATE:
+            if self.tri_value == 2:
+                return True
+            elif self.tri_value == 0:
+                return False
+        elif self.type == INT or self.type == HEX:
+            return int(self.str_value)
+        else:
+            return self.str_value
+
+    @val.setter
+    def val(self, value):
+        self.kconfig.configured_syms.add(self)
+        self._attempted_value = value
+        if self.type == BOOL or self.type == TRISTATE:
+            if value:
+                self.set_value(2)
+            else:
+                self.set_value(0)
+        else:
+            self.set_value(str(value))
+        self.check_val()
+
+    def check_val(self):
+        for ref_sym in self.kconfig.configured_syms:
+            if ref_sym._attempted_value:
+                if ref_sym.val != ref_sym._attempted_value:
+                    if ref_sym == self:
+                        raise ValueError("Could not set {} to {} from {}".format(ref_sym.name, ref_sym._attempted_value, ref_sym.val))
+                    else:
+                        raise ValueError("Could not set {} to {} from {} due to {}: {}".format(ref_sym.name, ref_sym._attempted_value, ref_sym.val, self.name, self._attempted_value))
 
     @property
     def str_value(self):
@@ -4785,8 +4873,9 @@ class Symbol(object):
 
         # - UNKNOWN == 0
         # - _visited is used during tree iteration and dep. loop detection
-        self.orig_type = self._visited = 0
 
+        self._attempted_value = None
+        self.orig_type = self._visited = 0
         self.nodes = []
 
         self.defaults = []
