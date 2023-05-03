@@ -1,0 +1,9 @@
+config FOO
+    bool "FOO prompt"
+
+config BAR
+    bool "BAR prompt"
+    depends on FOO
+
+config BAZ
+    bool "BAZ prompt"

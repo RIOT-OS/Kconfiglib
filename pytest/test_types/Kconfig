@@ -1,0 +1,14 @@
+config TEST_BOOL
+    bool "TEST_BOOL prompt"
+
+config TEST_TRISTATE
+    tristate "TEST_TRISTATE prompt"
+
+config TEST_STRING
+    string "TEST_STRING prompt"
+
+config TEST_INT
+    int "TEST_INT prompt"
+
+config TEST_HEX
+    hex "TEST_HEX prompt"
